@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	ver string = "0.52"
+	ver string = "0.53"
 	dirDateLayout string = "2006-01-02_150405"
 	logDateLayout string = "2006-01-02 15:04:05"
 	lagTolerance = 5 // in seconds
@@ -136,22 +136,23 @@ func stopBalancer(url string, stopBalancerTimeout int) error {
 		return err
 	}
 	defer session.Close()
-
 	log.Info("Disabling mongo balancer")
 	c := session.DB("config").C("settings")
+	session.SetSafe(&mgo.Safe{WMode: "majority"})
 	err = c.Update(bson.M{"_id": "balancer"}, bson.M{"$set": bson.M{"stopped": true}})
 	if err != nil {
 		return fmt.Errorf("Cannot disable balancer, if balancer was never disabled on this cluster try enabling and disabling it manually, sh.stopBalancer(), sh.startBalancer(): %v", err)
 	}
-
+	session.SetSafe(nil)
 	log.Info("Waiting for balancer unlocked")
-	c = session.DB("config").C("locks")
-	result := Lock{}
+
+	result := bson.M{}
 	unlocked := false
 	for i := 0; i < stopBalancerTimeout; i++ {
-		err := c.Find(bson.M{"_id": "balancer"}).One(&result)
+		err := session.DB("admin").Run(bson.D{{"balancerStatus", 1}}, &result)
+		fmt.Printf("%+v\n", result)
 		if err == nil {
-			if result.State == 0 {
+			if result["mode"] == "off" && result["inBalancerRound"] == false {
 				unlocked = true
 				break
 			}
@@ -176,9 +177,9 @@ func startBalancer(url string) error {
 		return err
 	}
 	defer session.Close()
+	session.SetSafe(&mgo.Safe{WMode: "majority"})
 
 	c := session.DB("config").C("settings")
-
 	log.Info("Enabling mongo balancer")
 	err = c.Update(bson.M{"_id": "balancer"}, bson.M{"$set": bson.M{"stopped": false}})
 
